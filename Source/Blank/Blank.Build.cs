@@ -15,7 +15,8 @@ public class Blank : ModuleRules
 			"InputCore",
 			"EnhancedInput",
 			"AIModule" ,
-            "UMG"
+            "UMG",
+            "PhysicsCore"
         });
 
 		PrivateDependencyModuleNames.AddRange(new string[] {  });

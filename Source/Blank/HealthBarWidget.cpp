@@ -12,5 +12,6 @@ void UHealthBarWidget::SetHealthPercent(float Percent)
 	else
 	{
 		UE_LOG(LogTemp, Error, TEXT("ProgressBar_HealthBar is null!"));
+
 	}
 }

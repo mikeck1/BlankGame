@@ -7,6 +7,8 @@
 #include "InputAction.h"
 #include "GameFramework/PlayerController.h"
 #include "UObject/ConstructorHelpers.h"
+#include "PhysicsEngine/PhysicsAsset.h"
+#include "Engine/StaticMeshActor.h"
 
 #include "Camera/CameraComponent.h"
 #include "GameFramework/SpringArmComponent.h"
@@ -17,7 +19,8 @@
 #include "Kismet/GameplayStatics.h"
 
 #include "../HealthBarWidget.h"
-
+#include "../Items/DroppedItemActor.h"
+#include "EngineUtils.h"
 
 APlayerCharacter::APlayerCharacter()
 {
@@ -39,6 +42,17 @@ APlayerCharacter::APlayerCharacter()
 	static ConstructorHelpers::FObjectFinder<UInputAction> AttackInput(TEXT("/Game/input_actions/Actions/IA_Attack"));
 	if (AttackInput.Succeeded()) AttackAction = AttackInput.Object;
 
+	static ConstructorHelpers::FObjectFinder<UInputAction> ScrollInput(TEXT("/Game/input_actions/Actions/IA_Scroll"));
+	if (ScrollInput.Succeeded()) ScrollAction = ScrollInput.Object;
+
+	static ConstructorHelpers::FObjectFinder<UInputAction> DropItemInput(TEXT("/Game/input_actions/Actions/IA_DropItem"));
+	if (DropItemInput.Succeeded())
+		DropItemAction = DropItemInput.Object;
+	else
+		UE_LOG(LogTemp, Error, TEXT("Failed to load IA_Drop input action!"));
+
+
+	// HUD
 	static ConstructorHelpers::FClassFinder<UUserWidget> HealthBarBPClass(TEXT("/Game/UI/WBP_HealthBar_Custom"));
 	if (HealthBarBPClass.Succeeded())
 	{
@@ -85,15 +99,38 @@ APlayerCharacter::APlayerCharacter()
 
 
 	// Load Skeletal Mesh
-	static ConstructorHelpers::FObjectFinder<USkeletalMesh> MeshFinder(TEXT("/Game/RPGHeroSquad/Mesh/Character/SK_RPGHeroPolyart.SK_RPGHeroPolyart"));
+	static ConstructorHelpers::FObjectFinder<USkeletalMesh> MeshFinder(TEXT("/Game/RPGHeroSquad/Mesh/Character/SK_TinyHeroGirlPBR.SK_TinyHeroGirlPBR"));
 	if (MeshFinder.Succeeded())
 	{
 		CharacterMesh->SetSkeletalMesh(MeshFinder.Object);
 		CharacterMesh->SetAnimationMode(EAnimationMode::AnimationSingleNode);
-		if (IdleAnim) CharacterMesh->PlayAnimation(IdleAnim, true);
+
+		// Set the custom physics asset
+		UPhysicsAsset* PhysicsAsset = LoadObject<UPhysicsAsset>(nullptr, TEXT("/Game/RPGHeroSquad/Mesh/Character/PhysicsAssetAndSkeleton/TinyHeroGirlPBR_PhysicsAsset.TinyHeroGirlPBR_PhysicsAsset"));
+		if (PhysicsAsset)
+		{
+			CharacterMesh->SetPhysicsAsset(PhysicsAsset);
+		}
+
+		if (IdleAnim)
+		{
+			CharacterMesh->PlayAnimation(IdleAnim, true);
+		}
 	}
 
+
 	CurrentHealth = MaxHealth;
+
+	// Inventory
+	// In constructor, after your mesh setup
+
+	EquippedItemMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("EquippedItemMesh"));
+	EquippedItemMesh->SetupAttachment(GetMesh(), TEXT("hand_r")); // Use your actual socket name here
+	EquippedItemMesh->SetRelativeLocation(FVector::ZeroVector);
+	EquippedItemMesh->SetRelativeRotation(FRotator::ZeroRotator);
+	EquippedItemMesh->SetVisibility(false); // Hide by default until equipped
+
+
 }
 
 
@@ -130,10 +167,37 @@ void APlayerCharacter::Tick(float DeltaTime)
 			}
 		}
 	}
+	HandleProximityPickup();
 }
 
 
+void APlayerCharacter::HandleProximityPickup()
+{
+	// Get all dropped items in the world
+	for (TActorIterator<ADroppedItemActor> It(GetWorld()); It; ++It)
+	{
+		ADroppedItemActor* DroppedItem = *It;
 
+		if (!DroppedItem) continue;
+
+		float Distance = FVector::Dist(DroppedItem->GetActorLocation(), GetActorLocation());
+
+		if (Distance <= ProximityPickupRadius)
+		{
+			// Add item to inventory if not already there
+			if (DroppedItem->ItemData && !Inventory.Contains(DroppedItem->ItemData))
+			{
+				Inventory.Add(DroppedItem->ItemData);
+				EquipCurrentItem();
+
+				DroppedItem->Destroy();
+
+				// Only pick up one item per tick to avoid issues
+				break;
+			}
+		}
+	}
+}
 
 
 // Called when the game starts or when spawned
@@ -164,7 +228,7 @@ void APlayerCharacter::BeginPlay()
 		UE_LOG(LogTemp, Error, TEXT("HealthBarWidgetClass is null!"));
 	}
 
-
+	// Input
 
 	APlayerController* PC = Cast<APlayerController>(GetController());
 	UE_LOG(LogTemp, Warning, TEXT(">> PlayerController: %s"), PC ? *PC->GetName() : TEXT("nullptr"));
@@ -184,6 +248,14 @@ void APlayerCharacter::BeginPlay()
 			}
 		}
 	}
+
+	// Add the sword item to inventory
+	Inventory.Add(UItemBase::CreateSword(this));
+	Inventory.Add(UItemBase::CreateShield(this));
+	CurrentInventoryIndex = 0;
+
+	// Equip the sword now!
+	EquipCurrentItem();
 }
 
 
@@ -198,6 +270,8 @@ void APlayerCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputCom
 		Input->BindAction(JumpAction, ETriggerEvent::Started, this, &APlayerCharacter::JumpStarted);
 		Input->BindAction(JumpAction, ETriggerEvent::Completed, this, &APlayerCharacter::JumpStopped);
 		Input->BindAction(AttackAction, ETriggerEvent::Started, this, &APlayerCharacter::Attack);
+		Input->BindAction(ScrollAction, ETriggerEvent::Triggered, this, &APlayerCharacter::OnScroll);
+		Input->BindAction(DropItemAction, ETriggerEvent::Started, this, &APlayerCharacter::DropCurrentItem);
 	}
 }
 
@@ -214,6 +288,7 @@ void APlayerCharacter::Move(const FInputActionValue& Value)
 		AddMovementInput(Right, Input.X);
 	}
 }
+
 
 void APlayerCharacter::Look(const FInputActionValue& Value)
 {
@@ -266,7 +341,9 @@ void APlayerCharacter::Attack()
 		if (HitActor && HitActor->ActorHasTag("Enemy"))
 		{
 			UE_LOG(LogTemp, Warning, TEXT("Hit enemy! Applying damage."));
-			UGameplayStatics::ApplyDamage(HitActor, 25.f, GetController(), this, nullptr);
+			UItemBase* Equipped = GetEquippedItem();
+			float DamageToApply = Equipped ? Equipped->Damage : 25.f;
+			UGameplayStatics::ApplyDamage(HitActor, DamageToApply, GetController(), this, nullptr);
 		}
 	}
 	else
@@ -279,9 +356,13 @@ void APlayerCharacter::Attack()
 }
 
 
+
+
 void APlayerCharacter::OnAttackFinished()
 {
 	bIsAttacking = false;
+
+	if (bIsDead) return;
 
 	// Return to Idle or Run based on speed immediately or on next Tick
 	float Speed = GetVelocity().Size2D();
@@ -291,6 +372,24 @@ void APlayerCharacter::OnAttackFinished()
 		CharacterMesh->PlayAnimation(IdleAnim, true);
 }
 
+
+void APlayerCharacter::OnScroll(const FInputActionValue& Value)
+{
+	if (bIsDead || Inventory.Num() == 0)
+		return;
+
+	float ScrollValue = Value.Get<float>();
+	UE_LOG(LogTemp, Warning, TEXT("OnScroll triggered: %f"), ScrollValue);
+
+	if (ScrollValue > 0)
+	{
+		ChangeInventoryIndex(1);  // scroll up: next item
+	}
+	else if (ScrollValue < 0)
+	{
+		ChangeInventoryIndex(-1); // scroll down: previous item
+	}
+}
 
 void APlayerCharacter::TakeDamage(float DamageAmount)
 {
@@ -335,6 +434,59 @@ void APlayerCharacter::TakeDamage(float DamageAmount)
 	}
 }
 
+void APlayerCharacter::DropCurrentItem()
+{
+	if (bIsDead || Inventory.Num() == 0)
+		return;
+
+	if (!Inventory.IsValidIndex(CurrentInventoryIndex))
+	{
+		UE_LOG(LogTemp, Warning, TEXT("DropCurrentItem: Invalid CurrentInventoryIndex %d"), CurrentInventoryIndex);
+		return;
+	}
+
+	UItemBase* ItemToDrop = GetEquippedItem();
+	if (!ItemToDrop || !ItemToDrop->Mesh)
+		return;
+
+	FVector SpawnLocation = GetActorLocation() + GetActorForwardVector() * 400.f + FVector(0, 0, 50.f);
+	FRotator SpawnRotation = FRotator::ZeroRotator;
+
+	FActorSpawnParameters SpawnParams;
+	SpawnParams.Owner = this;
+
+	ADroppedItemActor* DroppedActor = GetWorld()->SpawnActor<ADroppedItemActor>(SpawnLocation, SpawnRotation, SpawnParams);
+	if (DroppedActor)
+	{
+		DroppedActor->ItemData = ItemToDrop;
+		DroppedActor->MeshComponent->SetStaticMesh(ItemToDrop->Mesh);
+		DroppedActor->MeshComponent->SetSimulatePhysics(true);
+
+		FVector ThrowVelocity = GetActorForwardVector() * 800.f + FVector(0, 0, 200.f);
+		DroppedActor->MeshComponent->AddImpulse(ThrowVelocity, NAME_None, true);
+	}
+
+	// Remove item before re-equipping
+	Inventory.RemoveAt(CurrentInventoryIndex);
+
+	// Fix CurrentInventoryIndex AFTER removal
+	if (Inventory.Num() == 0)
+	{
+		CurrentInventoryIndex = INDEX_NONE;
+	}
+	else
+	{
+		CurrentInventoryIndex = FMath::Clamp(CurrentInventoryIndex, 0, Inventory.Num() - 1);
+	}
+
+	EquipCurrentItem();  // This now uses the safe CurrentInventoryIndex
+
+}
+
+
+
+
+
 
 void APlayerCharacter::StartRespawnCountdown()
 {
@@ -365,6 +517,8 @@ void APlayerCharacter::RespawnPlayer()
 
 		APlayerController* PC = Cast<APlayerController>(GetController());
 		if (PC) PC->EnableInput(PC);
+
+		UpdateHealthBar();
 	}
 }
 
@@ -376,3 +530,60 @@ void APlayerCharacter::UpdateHealthBar()
 	float Percent = FMath::Clamp(CurrentHealth / MaxHealth, 0.f, 1.f);
 	HealthBarWidget->SetHealthPercent(Percent);
 }
+
+void APlayerCharacter::EquipCurrentItem()
+{
+	if (!EquippedItemMesh)
+	{
+		UE_LOG(LogTemp, Error, TEXT("EquipCurrentItem: EquippedItemMesh is null!"));
+		return;
+	}
+
+	if (bIsDead || CurrentInventoryIndex == INDEX_NONE || !Inventory.IsValidIndex(CurrentInventoryIndex))
+	{
+		EquippedItemMesh->SetStaticMesh(nullptr);
+		EquippedItemMesh->SetVisibility(false);
+		return;
+	}
+
+	UItemBase* CurrentItem = GetEquippedItem();  // use centralized function
+	if (!CurrentItem || !CurrentItem->Mesh)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("EquipCurrentItem: Item is null or has no mesh."));
+		EquippedItemMesh->SetStaticMesh(nullptr);
+		EquippedItemMesh->SetVisibility(false);
+		return;
+	}
+
+	EquippedItemMesh->SetStaticMesh(CurrentItem->Mesh);
+	EquippedItemMesh->SetVisibility(true);
+	EquippedItemMesh->SetRelativeLocation(FVector::ZeroVector);
+	EquippedItemMesh->SetRelativeRotation(FRotator::ZeroRotator);
+	EquippedItemMesh->SetRelativeScale3D(FVector(1.f));
+}
+
+
+
+
+void APlayerCharacter::ChangeInventoryIndex(int32 Delta)
+{
+	if (Inventory.Num() == 0)
+	{
+		CurrentInventoryIndex = INDEX_NONE;
+		EquipCurrentItem();
+		return;
+	}
+
+	// Clamp index safely
+	if (CurrentInventoryIndex == INDEX_NONE)
+	{
+		CurrentInventoryIndex = 0;
+	}
+	else
+	{
+		CurrentInventoryIndex = (CurrentInventoryIndex + Delta + Inventory.Num()) % Inventory.Num();
+	}
+
+	EquipCurrentItem();
+}
+

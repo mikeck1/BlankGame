@@ -32,6 +32,7 @@ protected:
 	void UpdateAI();
 	void TryAttack();
 	void ResetAttack();
+	void PlayIdle();
 
 	// Stats
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Health")
@@ -50,6 +51,10 @@ protected:
 	UPROPERTY()
 	UAnimSequence* AttackAnim;
 
+	UPROPERTY()
+	UAnimSequence* IdleAnim;
+	FTimerHandle HitAnimTimerHandle;
+
 	// AI
 	UPROPERTY()
 	APlayerCharacter* PlayerCharacter;
@@ -64,5 +69,7 @@ protected:
 	FTimerHandle AttackCooldownTimerHandle;
 
 	bool bCanAttack = true;
+	bool bIsDead = false;
+
 	FTimerHandle DeathTimerHandle;
 };

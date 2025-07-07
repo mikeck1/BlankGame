@@ -6,6 +6,7 @@
 #include "TimerManager.h"
 #include "Blueprint/UserWidget.h"
 
+#include "../Items/ItemBase.h"
 
 #include "PlayerCharacter.generated.h"
 
@@ -25,6 +26,9 @@ public:
 	APlayerCharacter();
 
 	void TakeDamage(float DamageAmount);
+
+	UPROPERTY()
+	TArray<UItemBase*> Inventory;
 
 protected:
 	virtual void BeginPlay() override;
@@ -46,6 +50,13 @@ protected:
 
 	UPROPERTY(EditDefaultsOnly, Category = "Input")
 	UInputAction* AttackAction;
+
+	UPROPERTY(EditDefaultsOnly, Category = "Input")
+	UInputAction* ScrollAction;
+
+	UInputAction* DropItemAction;
+	void DropCurrentItem();
+
 
 	// Camera
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Camera")
@@ -78,6 +89,36 @@ protected:
 
 	class UHealthBarWidget* HealthBarWidget;
 
+
+	// Inventory
+	
+
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Inventory")
+	UStaticMeshComponent* EquippedItemMesh;
+
+	UPROPERTY(EditAnywhere, Category = "Pickup")
+	float ProximityPickupRadius = 200.f;
+
+	int32 CurrentInventoryIndex = 0;
+
+	public: void EquipCurrentItem();
+	public: void HandleProximityPickup();
+
+	void ChangeInventoryIndex(int32 Delta);
+
+	void OnScroll(const FInputActionValue& Value);
+
+	UItemBase* GetEquippedItem() const
+	{
+		UE_LOG(LogTemp, Error, TEXT("EquipCurrentItem: EquippedItemMesh is null!"));
+
+		if (CurrentInventoryIndex < 0 || !Inventory.IsValidIndex(CurrentInventoryIndex))
+		{
+			return nullptr;
+		}
+		return Inventory[CurrentInventoryIndex];
+	}
 
 
 

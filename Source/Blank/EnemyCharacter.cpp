@@ -25,7 +25,7 @@ AEnemyCharacter::AEnemyCharacter()
     GetMesh()->SetAnimationMode(EAnimationMode::AnimationSingleNode);
 
     // Load skeletal mesh
-    static ConstructorHelpers::FObjectFinder<USkeletalMesh> MeshAsset(TEXT("/Game/RPGHeroSquad/Mesh/Character/SK_RPGHeroPolyart.SK_RPGHeroPolyart"));
+    static ConstructorHelpers::FObjectFinder<USkeletalMesh> MeshAsset(TEXT("/Game/RPGHeroSquad/Mesh/Character/SK_DogPBR.SK_DogPBR"));
     if (MeshAsset.Succeeded())
     {
         GetMesh()->SetSkeletalMesh(MeshAsset.Object);
@@ -40,6 +40,9 @@ AEnemyCharacter::AEnemyCharacter()
 
     static ConstructorHelpers::FObjectFinder<UAnimSequence> AttackAnimObj(TEXT("/Game/RPGHeroSquad/Animation/RPGHero/Anim_NormalAttack02_RPGHero.Anim_NormalAttack02_RPGHero"));
     if (AttackAnimObj.Succeeded()) AttackAnim = AttackAnimObj.Object;
+
+    static ConstructorHelpers::FObjectFinder<UAnimSequence> IdleAnimObj(TEXT("/Game/RPGHeroSquad/Animation/RPGHero/Anim_Idle_RPGHero.Anim_Idle_RPGHero"));
+    if (IdleAnimObj.Succeeded()) IdleAnim = IdleAnimObj.Object;
 
     Tags.Add(FName("Enemy"));
 
@@ -67,6 +70,11 @@ void AEnemyCharacter::BeginPlay()
     PlayerCharacter = Cast<APlayerCharacter>(UGameplayStatics::GetPlayerCharacter(GetWorld(), 0));
 
     GetWorldTimerManager().SetTimer(AIUpdateTimerHandle, this, &AEnemyCharacter::UpdateAI, 0.5f, true);
+
+    if (IdleAnim)
+    {
+        GetMesh()->PlayAnimation(IdleAnim, true);
+    }
 }
 
 void AEnemyCharacter::UpdateAI()
@@ -109,6 +117,7 @@ void AEnemyCharacter::TryAttack()
 void AEnemyCharacter::ResetAttack()
 {
     bCanAttack = true;
+    GetMesh()->PlayAnimation(IdleAnim, true); // true = loop
 }
 
 float AEnemyCharacter::TakeDamage(float DamageAmount, FDamageEvent const& DamageEvent, AController* EventInstigator, AActor* DamageCauser)
@@ -138,11 +147,23 @@ void AEnemyCharacter::PlayHit()
     if (HitAnim)
     {
         GetMesh()->PlayAnimation(HitAnim, false);
+
+        // Return to idle after hit finishes
+        GetWorldTimerManager().SetTimer(HitAnimTimerHandle, this, &AEnemyCharacter::PlayIdle, HitAnim->GetPlayLength(), false);
     }
+}
+
+void AEnemyCharacter::PlayIdle()
+{
+    if (bIsDead || !IdleAnim) return;
+
+    GetMesh()->PlayAnimation(IdleAnim, true);
 }
 
 void AEnemyCharacter::Die()
 {
+    bIsDead = true;
+
     if (DeathAnim)
     {
         GetMesh()->PlayAnimation(DeathAnim, false);
@@ -158,6 +179,7 @@ void AEnemyCharacter::Die()
         GetMesh()->SetVisibility(false);
     }
 }
+
 
 void AEnemyCharacter::OnDeathAnimationFinished()
 {
